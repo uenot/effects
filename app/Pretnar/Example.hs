@@ -2,13 +2,6 @@ module Pretnar.Example where
 
 import Pretnar.Lang
 
-testProgram :: Computation
-testProgram =
-  Op "read" Unit "str" $
-    Op "print" (Var "str") "res" $
-      Return $
-        Var "res"
-
 testSig :: OpSignature
 testSig =
   [ ("read", OpType UnitType StringType),
@@ -18,13 +11,13 @@ testSig =
   ]
 
 metaHandler :: Computation -> IO (Maybe Computation)
-metaHandler (Op "read" _ y c) = do
+metaHandler (Perform "read" _ y c) = do
   str <- getLine
   return $ Just $ substituteComp y (StringVal str) c
-metaHandler (Op "print" v y c) = case v of
+metaHandler (Perform "print" v y c) = case v of
   (StringVal str) -> do
     putStrLn str
-    return $ Just $ substituteComp y Unit c
+    return $ Just $ substituteComp y UnitVal c
   _ -> return Nothing
 metaHandler _ = return Nothing
 
@@ -39,13 +32,13 @@ eval c = case step c of
 
 printFullName :: Computation
 printFullName =
-  Op "print" (StringVal "What is your forename?") "_" $
-    Op "read" Unit "forename" $
-      Op "print" (StringVal "What is your surname?") "_" $
-        Op "read" Unit "surname" $
+  Perform "print" (StringVal "What is your forename?") "_" $
+    Perform "read" UnitVal "forename" $
+      Perform "print" (StringVal "What is your surname?") "_" $
+        Perform "read" UnitVal "surname" $
           Join (Var "forename") (Var "surname") "res" $
-            Op "print" (Var "res") "_" $
-              Return Unit
+            Perform "print" (Var "res") "_" $
+              Return UnitVal
 
 alwaysRead :: Value
 alwaysRead =
@@ -65,8 +58,8 @@ reverseHandler =
       Nothing
       [ ( "print",
           OpClause "s" "k" $
-            Let "_" (App (Var "k") Unit) $
-              Op "print" (Var "s") "res" $
+            Let "_" (App (Var "k") UnitVal) $
+              Perform "print" (Var "s") "res" $
                 Return $
                   Var "res"
         )
@@ -74,10 +67,10 @@ reverseHandler =
 
 abc :: Computation
 abc =
-  Let "_" (Op "print" (StringVal "A") "x" $ Return $ Var "x") $
-    Let "_" (Op "print" (StringVal "B") "x" $ Return $ Var "x") $
-      Let "_" (Op "print" (StringVal "C") "x" $ Return $ Var "x") $
-        Return Unit
+  Let "_" (Perform "print" (StringVal "A") "x" $ Return $ Var "x") $
+    Let "_" (Perform "print" (StringVal "B") "x" $ Return $ Var "x") $
+      Let "_" (Perform "print" (StringVal "C") "x" $ Return $ Var "x") $
+        Return UnitVal
 
 testReverse :: Computation
 testReverse = With reverseHandler abc
@@ -87,15 +80,15 @@ collect =
   HandlerVal $
     Handler
       UnitType
-      (Just $ ReturnClause "x" $ Return $ Pair (Var "x") (StringVal ""))
+      (Just $ ReturnClause "x" $ Return $ Tuple (Var "x") (StringVal ""))
       [ ( "print",
           OpClause "s" "k" $
-            Let "pair" (App (Var "k") Unit) $
+            Let "pair" (App (Var "k") UnitVal) $
               First (Var "pair") "x" $
                 Second (Var "pair") "acc" $
                   Join (Var "s") (Var "acc") "res" $
                     Return $
-                      Pair (Var "x") (Var "res")
+                      Tuple (Var "x") (Var "res")
         )
       ]
 
@@ -115,14 +108,14 @@ collectPP =
             Return $
               Func "acc" StringType $
                 Return $
-                  Pair (Var "x") (Var "acc")
+                  Tuple (Var "x") (Var "acc")
       )
       [ ( "print",
           OpClause "s" "k" $
             Return $
               Func "acc" StringType $
                 Join (Var "acc") (Var "s") "res" $
-                  Let "f" (App (Var "k") Unit) $
+                  Let "f" (App (Var "k") UnitVal) $
                     App (Var "f") (Var "res")
         )
       ]
@@ -142,14 +135,14 @@ testDefault =
   Let "handler" (App handleDefault $ StringVal "default") $
     With (Var "handler") $
       Let "x" (Return $ StringVal "test") $
-        Op "raise" (StringVal "test error") "_" $
+        Perform "raise" (StringVal "test error") "_" $
           Return $
             Var "x"
 
 choose :: Value
 choose =
   Func "xy" (TupleType StringType StringType) $
-    Op "decide" Unit "b" $
+    Perform "decide" UnitVal "b" $
       If
         (Var "b")
         (First (Var "xy") "x" $ Return $ Var "x")
@@ -157,8 +150,8 @@ choose =
 
 chooseTest :: Computation
 chooseTest =
-  Let "x1" (App choose (Pair (StringVal "a") (StringVal "b"))) $
-    Let "x2" (App choose (Pair (StringVal "c") (StringVal "d"))) $
+  Let "x1" (App choose (Tuple (StringVal "a") (StringVal "b"))) $
+    Let "x2" (App choose (Tuple (StringVal "c") (StringVal "d"))) $
       Join (Var "x1") (Var "x2") "res" $
         Return $
           Var "res"
@@ -167,7 +160,15 @@ pickTrue :: Value
 pickTrue =
   HandlerVal $
     Handler StringType Nothing $
-      [("decide", OpClause "_" "k" $ Let "res" (App (Var "k") TrueVal) $ Return $ Var "res")]
+      [("decide", OpClause "_" "k" $ Let "res" (App (Var "k") (BoolVal True)) $ Return $ Var "res")]
 
 testPickTrue :: Computation
 testPickTrue = With pickTrue chooseTest
+
+test :: Computation -> IO ()
+test program = do
+  let tp = typecheckComp testSig [] program
+  putStrLn $ "TYPE: " ++ show tp
+  putStrLn "Evaluating..."
+  res <- eval program
+  putStrLn $ "RESULT: " ++ show res

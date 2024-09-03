@@ -3,19 +3,14 @@ module Pretnar.Lang where
 import Control.Monad (guard)
 import Data.Set (Set)
 import qualified Data.Set as Set
-import GHC.IO (unsafePerformIO)
-
--- Implementation based on https://www.eff-lang.org/handlers-tutorial.pdf
 
 data Value
   = Var String
-  | TrueVal
-  | FalseVal
+  | BoolVal Bool
   | StringVal String
-  | Unit
-  | -- adds type of argument, diverging from paper (I don't want to write type inference)
-    Func String ValueType Computation
-  | Pair Value Value
+  | UnitVal
+  | Func String ValueType Computation
+  | Tuple Value Value
   | HandlerVal Handler
   deriving (Show)
 
@@ -31,7 +26,7 @@ data Handler = Handler ValueType (Maybe ReturnClause) [(String, OpClause)] deriv
 data Computation
   = Return Value
   | -- id, parameter, result, continuation
-    Op String Value String Computation
+    Perform String Value String Computation
   | Let String Computation Computation
   | If Value Computation Computation
   | Join Value Value String Computation
@@ -51,14 +46,13 @@ substituteValue :: String -> Value -> Value -> Value
 substituteValue x v (Var x')
   | x == x' = v
   | otherwise = Var x'
-substituteValue _ _ TrueVal = TrueVal
-substituteValue _ _ FalseVal = FalseVal
+substituteValue _ _ (BoolVal b) = BoolVal b
 substituteValue _ _ (StringVal s) = StringVal s
 substituteValue x v (Func y tp c)
   | x == y = Func y tp c
   | otherwise = Func y tp $ substituteComp x v c
-substituteValue _ _ Unit = Unit
-substituteValue x v (Pair v1 v2) = Pair (substituteValue x v v1) (substituteValue x v v2)
+substituteValue _ _ UnitVal = UnitVal
+substituteValue x v (Tuple v1 v2) = Tuple (substituteValue x v v1) (substituteValue x v v2)
 substituteValue x v (HandlerVal (Handler tp rc ops)) =
   let ops' = substituteOps x v ops
    in case rc of
@@ -69,9 +63,9 @@ substituteValue x v (HandlerVal (Handler tp rc ops)) =
 
 substituteComp :: String -> Value -> Computation -> Computation
 substituteComp x v (Return v') = Return $ substituteValue x v v'
-substituteComp x v (Op n v' y c)
-  | x == y = Op n (substituteValue x v v') y c
-  | otherwise = Op n (substituteValue x v v') y (substituteComp x v c)
+substituteComp x v (Perform n v' y c)
+  | x == y = Perform n (substituteValue x v v') y c
+  | otherwise = Perform n (substituteValue x v v') y (substituteComp x v c)
 substituteComp x v (Let y c1 c2)
   | x == y = Let y (substituteComp x v c1) c2
   | otherwise = Let y (substituteComp x v c1) (substituteComp x v c2)
@@ -90,23 +84,23 @@ substituteComp x v (With v' c) = With (substituteValue x v v') (substituteComp x
 
 step :: Computation -> Maybe Computation
 step (Let x (Return v) c2) = return $ substituteComp x v c2
-step (Let x (Op n v y c1) c2) = return $ Op n v y $ Let x c1 c2
+step (Let x (Perform n v y c1) c2) = return $ Perform n v y $ Let x c1 c2
 step (Let x c1 c2) = do
   c1' <- step c1
   return $ Let x c1' c2
-step (If TrueVal c1 _) = return c1
-step (If FalseVal _ c2) = return c2
+step (If (BoolVal True) c1 _) = return c1
+step (If (BoolVal False) _ c2) = return c2
 step (Join (StringVal s1) (StringVal s2) y c) = return $ substituteComp y (StringVal $ s1 ++ " " ++ s2) c
-step (First (Pair v1 _) y c) = return $ substituteComp y v1 c
-step (Second (Pair _ v2) y c) = return $ substituteComp y v2 c
+step (First (Tuple v1 _) y c) = return $ substituteComp y v1 c
+step (Second (Tuple _ v2) y c) = return $ substituteComp y v2 c
 step (App (Func x _ c) v) = return $ substituteComp x v c
 step (With (HandlerVal (Handler _ rc _)) (Return v)) = case rc of
   Just (ReturnClause x c) -> return $ substituteComp x v c
   Nothing -> return $ Return v
-step (With h (Op n v y c)) = case h of
+step (With h (Perform n v y c)) = case h of
   (HandlerVal (Handler _ _ ops)) -> case lookup n ops of
     Just (OpClause x k c') -> return $ substituteComp x v $ substituteComp k (Func y UnitType $ With h c) c'
-    Nothing -> return $ Op n v y $ With h c
+    Nothing -> return $ Perform n v y $ With h c
   _ -> Nothing
 step (With h c) = do
   c' <- step c
@@ -142,11 +136,10 @@ diff (CompType v1 ops1) (CompType v2 ops2) = do
 
 typecheckValue :: OpSignature -> TypeContext -> Value -> Maybe ValueType
 typecheckValue _ ctx (Var x) = lookup x ctx
-typecheckValue _ _ TrueVal = return BoolType
-typecheckValue _ _ FalseVal = return BoolType
+typecheckValue _ _ (BoolVal _) = return BoolType
 typecheckValue _ _ (StringVal _) = return StringType
-typecheckValue _ _ Unit = return UnitType
-typecheckValue sig ctx (Pair v1 v2) = do
+typecheckValue _ _ UnitVal = return UnitType
+typecheckValue sig ctx (Tuple v1 v2) = do
   t1 <- typecheckValue sig ctx v1
   t2 <- typecheckValue sig ctx v2
   return $ TupleType t1 t2
@@ -175,7 +168,7 @@ typecheckComp :: OpSignature -> TypeContext -> Computation -> Maybe CompType
 typecheckComp sig ctx (Return x) = do
   tx <- typecheckValue sig ctx x
   return $ CompType tx Set.empty
-typecheckComp sig ctx (Op n v y c) = case lookup n sig of
+typecheckComp sig ctx (Perform n v y c) = case lookup n sig of
   Nothing -> Nothing
   Just (OpType a b) -> do
     tv <- typecheckValue sig ctx v
