@@ -1,6 +1,7 @@
 module Main where
 
+import qualified HandlerCalculus.Test as HandlerCalculus
 import Pretnar.Example
 
 main :: IO ()
-main = test testCollectPP
+main = HandlerCalculus.test
